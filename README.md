@@ -5,7 +5,6 @@ An automation "wrapper" based on TF-SLIM to make it easy to detect various featu
 
 ## Features
 
- - Ability to detect & train for various features in both images and video.
  - Can utilize virtually any trained model (Inception Resnet V2, Mobilenet, etc) via TF-SLIM.
  - Runs under both Linux and Windows (Python 3.6.x).
  - Silly fast, even on CPU for detection. Using an GTX 1060 Nvidia GPU it can perform analysis of a two-hour video in less than 7 minutes even using 
@@ -40,11 +39,12 @@ Search video for features in video. Creates/overwrites `[videofilename]-results.
 #### Complex example:
 
 `videoscan.py` __`--modelpath` models/mymodel.pb `--labelpath` models\mylabelsfilename.txt `--reportpath` ..\example-reports
-`--labelname` mylabel `--fps` 5 `--allfiles` `--outputclips` `--smoothing` 2 `--training` [/path/to/video/files]__
+`--labelname` mylabel `--fps` 5 `--allfiles` `--outputclips` `--smoothing` 2 `--training` --videopath [/path/to/video/files]__
 
 #### Additional Switches & Options
 
 `--modelpath` Path to the tensorflow protobuf model file.
+<br>`--modeltype` Type of Tensorflow model being loaded (mobilenetV1, inception_resnet_v2, etc).
 <br>`--labelpath` Path to the tensorflow model labels file.
 <br>`--labelname` Name of primary label, used to trigger secondary model (if needed).
 <br>`--reportpath` Path to the directory where reports/output are stored.
