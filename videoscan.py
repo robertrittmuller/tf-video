@@ -15,6 +15,7 @@ import timeit
 # DONE: Modify model unpersist function to use loaded model name vs. static assignment.
 # TODO: Add support for loading multiple primary and secondary models.
 # TODO: Need to cycle through all detected labels and correctly output to report.
+# TODO: Add support for basic HTML report which includes processed data & visualizations.
 
 # set start time
 start = timeit.default_timer()
