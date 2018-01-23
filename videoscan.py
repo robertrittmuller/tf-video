@@ -9,6 +9,7 @@ import argparse
 from glob import iglob
 from shutil import copy
 import timeit
+import uuid
 
 # TODO: Modify detection to only process data after inference has completed.
 # TODO: Update smoothing function to work as intended (currently broken)
@@ -196,12 +197,23 @@ def setup_logging(passed_filename):
     return open(filename, 'w')
 
 
+def load_model(modelpath):
+    if os.path.exists(modelpath):
+        with tf.gfile.FastGFile(modelpath, 'rb') as file:
+            graph_def1 = tf.GraphDef()
+            graph_def1.ParseFromString(file.read())
+            tensor_id = str(uuid.uuid4())
+            return tf.import_graph_def(graph_def1, name=tensor_id)
+    else:
+        return False
+
+
 # Unpersists primary graph from file
-if os.path.exists(args.modelpath):
-    with tf.gfile.FastGFile(args.modelpath, 'rb') as f:
-        graph_def1 = tf.GraphDef()
-        graph_def1.ParseFromString(f.read())
-        primary_graph = tf.import_graph_def(graph_def1, name='primary')
+# if os.path.exists(args.modelpath):
+#     with tf.gfile.FastGFile(args.modelpath, 'rb') as f:
+#         graph_def1 = tf.GraphDef()
+#         graph_def1.ParseFromString(f.read())
+#         primary_graph = tf.import_graph_def(graph_def1, name='primary')
 
 # # Unpersists secondary graph from file
 # with tf.gfile.FastGFile("models/zone-features_graph.pb", 'rb') as g:
@@ -210,7 +222,8 @@ if os.path.exists(args.modelpath):
 #     secondary_graph = tf.import_graph_def(graph_def2, name='secondary')
 
 # setup sessions ahead of time
-    sess1 = tf.Session(graph=primary_graph)
+primary_graph = load_model(args.modelpath)
+sess1 = tf.Session(graph=primary_graph)
 
 
 # sess2 = tf.Session(graph=secondary_graph)
@@ -228,7 +241,7 @@ if os.path.exists(args.modelpath):
 #     for node in secondary_predictions:
 #         human_string = secondary_graph_lines[node]
 #         score = predictions[0][node]
-#         reportTarget.write('%s, %.5f,' % (human_string, score))
+#         reportTarget.write('%s, %.5f,' % (human_string, score))w
 #
 #     print('Processed potential construction zone in frame #' + str(n))
 
@@ -275,7 +288,6 @@ def runGraph(image_path, input_tensor, output_tensor):
 
                 if score >= 0.95:
                     reportTarget.write('%s, %s, %.5f, %s, ' % (n, human_string, score, 'High'))
-                    # runsecondarygraph(image)
                     reportTarget.write('\n')
                     smoothing = initial_smoothing
                     event.append(n)
@@ -283,21 +295,15 @@ def runGraph(image_path, input_tensor, output_tensor):
         if score < 0.75:
             if (smoothing == 0):
                 if len(event) >= initial_smoothing:
-                    # print('Event end on frame ' + str(n))
                     if args.outputclips == True:
                         videoclipend = create_clip(video_file, event, len(image_data), videoclipend)
                 event = []
                 smoothing = initial_smoothing
             else:
                 smoothing = smoothing - 1
-                # reportTarget.write('%s, %s, %.5f, %s, ' % (n, human_string, score, 'Low'))
-                # reportTarget.write('\n')
 
     fileTarget.write("\n")
-    # print('Current = ' + str(n) + '  Total = ' + str(len(image_data)))
-    # print(int(percentage(n, len(image_data))))
     drawProgressBar(percentage(n, len(image_data)) / 100, 40)  # --------------------- Start processing logic
-    # if only one file was passed for analysis then inject it into the passed array
 
 
 if args.allfiles:
