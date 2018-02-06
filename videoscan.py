@@ -10,13 +10,17 @@ from glob import iglob
 from shutil import copy
 import timeit
 import uuid
+import numpy as np
 
 # TODO: Modify detection to only process data after inference has completed.
-# TODO: Update smoothing function to work as intended (currently broken)
+# DONE: Update smoothing function to work as intended (currently broken)
 # DONE: Modify model unpersist function to use loaded model name vs. static assignment.
-# TODO: Add support for loading multiple primary and secondary models.
+# TODO: Add support for loading multiple models and performing predictions with all loaded models.
 # TODO: Need to cycle through all detected labels and correctly output to report.
 # TODO: Add support for basic HTML report which includes processed data & visualizations.
+
+# set logging level
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # set start time
 start = timeit.default_timer()
@@ -28,20 +32,15 @@ parser.add_argument('--trainingpath', '-rtp', dest='trainingpath', action='store
                     help='Path to the directory where frames for retraining are stored.')
 parser.add_argument('--reportpath', '-rp', dest='reportpath', action='store', default='results/',
                     help='Path to the directory where results are stored.')
-parser.add_argument('--modelpath', '-mp', dest='modelpath', action='store', default='models/default.pb',
+parser.add_argument('--modelpath', '-mp', dest='modelpath', action='store', default='models/',
                     help='Path to the tensorflow protobuf model file.')
 parser.add_argument('--labelpath', '-lp', dest='labelpath', action='store', default='models/default-labels.txt',
                     help='Path to the tensorflow model labels file.')
-parser.add_argument('--labelname', '-ln', dest='labelname', action='store', default='',
-                    help='Name of primary label, used to trigger secondary model (if needed).')
-parser.add_argument('--smoothing', '-sm', dest='smoothing', action='store', default='2',
+parser.add_argument('--smoothing', '-sm', dest='smoothing', action='store', default='0',
                     help='Apply a type of "smoothing" factor to detection results.')
 parser.add_argument('--fps', '-fps', dest='fps', action='store', default='1',
                     help='Frames Per Second used to sample input video. '
                          'The higher this number the slower analysis will go. Default is 1 FPS')
-parser.add_argument('--modeltype', '-mt', dest='modeltype', action='store', default='custom',
-                    help='The type of Tensorflow model being used. '
-                         'Currently supports InceptionV3, MobilenetV1, InceptionResnetV2, or specify custom to read from <modelname>-model.txt file. ')
 parser.add_argument('--allfiles', '-a', dest='allfiles', action='store_true',
                     help='Process all video files in the directory path.')
 parser.add_argument('--outputclips', '-o', dest='outputclips', action='store_true',
@@ -50,10 +49,8 @@ parser.add_argument('--training', '-tr', dest='training', action='store_true',
                     help='Saves predicted frames for future model retraining.')
 parser.add_argument('--outputpadding', '-op', dest='outputpadding', action='store', default='45',
                     help='Number of seconds added to the start and end of created video clips.')
-parser.add_argument('--filter', '-f', dest='filter', action='store', default='ALL',
-                    help='Value used to filter on a label.')
 parser.add_argument('--keeptemp', '-k', dest='keeptemp', action='store_true',
-                    help='Keep temporary extracted video frames.')
+                    help='Keep ALL temporary extracted video frames.')
 parser.add_argument('--videopath', '-v', dest='video_path', action='store', required=True, help='Path to video file(s).')
 
 args = parser.parse_args()
@@ -174,15 +171,14 @@ def load_labels(path):
 
 def load_tensor_types(path):
     # reads in the input and output tensors
-    if args.modeltype == 'custom':
-        with open(path) as file:
-            content = file.readlines()
-        return content[0].rstrip() + ':0', content[1].rstrip() + ':0'
-    else:
-        if args.modeltype =='mobilenetV1':
-            return 'input_image', 'MobilenetV1/Predictions/Reshape_1'
-        if args.modeltype == 'inception_resnet_v2':
-            return 'input_image', 'InceptionResnetV2/Logits/Predictions'
+    with open(path) as file:
+        content = file.readlines()
+    return content[0].rstrip() + ':0', content[1].rstrip() + ':0'  # return minus any extra characters we don't need
+    # else:
+    #     if args.modeltype =='mobilenetV1':
+    #         return 'input_image', 'MobilenetV1/Predictions/Reshape_1'
+    #     if args.modeltype == 'inception_resnet_v2':
+    #         return 'input_image', 'InceptionResnetV2/Logits/Predictions'
 
 
 def setup_reporting(passed_filename):
@@ -197,151 +193,174 @@ def setup_logging(passed_filename):
     return open(filename, 'w')
 
 
+def smoothListGaussian(list, strippedXs=False, degree=2):
+    window = degree * 2 - 1
+    weight = np.array([1.0] * window)
+    weightGauss = []
+    div_odd = lambda n: (n // 2, n // 2 + 1)
+
+    for i in range(window):
+        i = i - degree + 1
+
+        frac = i / float(window)
+
+        gauss = 1 / (np.exp((4 * (frac)) ** 2))
+
+        weightGauss.append(gauss)
+
+    weight = np.array(weightGauss) * weight
+    smoothed = [0.0] * (len(list) - window)
+
+    for i in range(len(smoothed)):
+        smoothed[i] = float("{0:.4f}".format(sum(np.array(list[i:i + window]) * weight) / sum(weight)))
+
+    padfront, padback = div_odd(window)
+    for i in range(0, padfront):
+        smoothed.insert(0, 0.0)
+    for i in range(0, padback):
+        smoothed.append(0.0)
+
+    return smoothed
+
 def load_model(modelpath):
     if os.path.exists(modelpath):
         with tf.gfile.FastGFile(modelpath, 'rb') as file:
             graph_def1 = tf.GraphDef()
             graph_def1.ParseFromString(file.read())
             tensor_id = str(uuid.uuid4())
-            return tf.import_graph_def(graph_def1, name=tensor_id)
+            return tensor_id, tf.import_graph_def(graph_def1, name=tensor_id)
     else:
         return False
 
 
-# Unpersists primary graph from file
-# if os.path.exists(args.modelpath):
-#     with tf.gfile.FastGFile(args.modelpath, 'rb') as f:
-#         graph_def1 = tf.GraphDef()
-#         graph_def1.ParseFromString(f.read())
-#         primary_graph = tf.import_graph_def(graph_def1, name='primary')
+def write_reports(path, data, smoothing=0):
+    smootheddata = []
+    logfile = setup_logging(path)
+    totalrec = len(data)
 
-# # Unpersists secondary graph from file
-# with tf.gfile.FastGFile("models/zone-features_graph.pb", 'rb') as g:
-#     graph_def2 = tf.GraphDef()
-#     graph_def2.ParseFromString(g.read())
-#     secondary_graph = tf.import_graph_def(graph_def2, name='secondary')
+    if smoothing > 0:
+        # Let's find out which columns have the data vs. just labels.
+        prediction_columns = []
+        column_count = 0
+        for item in data[0]:
+            if isinstance(item, float):
+                prediction_columns.append(column_count)
+            column_count += 1
 
-# setup sessions ahead of time
-primary_graph = load_model(args.modelpath)
-sess1 = tf.Session(graph=primary_graph)
+        # Now lets create new smoothed columns of data!
+        for datacolidx in prediction_columns:
+            labelcol = []
+            label = str(data[0][datacolidx - 1]) + 'SM'
+            for i in range(0, totalrec):
+                labelcol.append(label)
+            smootheddata.append(labelcol)
 
+            newcol = []
+            for row in data:
+                newcol.append(row[datacolidx])
+            newcol = smoothListGaussian(newcol, False, smoothing)
+            smootheddata.append(newcol)
 
-# sess2 = tf.Session(graph=secondary_graph)
+    frame_num = 1
+    line_num = 0
+    for row in data:
+        logfile.write('%s, ' % (frame_num))
+        for item in row:
+            logfile.write('%s, ' % (item))
+        if smoothing > 0:
+            for smooth_item in smootheddata:
+                logfile.write('%s, ' % (smooth_item[line_num]))
 
-# def runsecondarygraph(image_tensor):
-#
-#     # Feed the image_data as input to the graph and get first prediction
-#     softmax_tensor = sess2.graph.get_tensor_by_name('secondary/final_result:0')
-#
-#     predictions = sess2.run(softmax_tensor, \
-#                         {'secondary/DecodeJpeg/contents:0': image_tensor})
-#
-#     # secondary_predictions = predictions[0].argsort()[-len(predictions[0]):][::-1]
-#     secondary_predictions = [0, 1, 2]
-#     for node in secondary_predictions:
-#         human_string = secondary_graph_lines[node]
-#         score = predictions[0][node]
-#         reportTarget.write('%s, %.5f,' % (human_string, score))w
-#
-#     print('Processed potential construction zone in frame #' + str(n))
+        logfile.write("\n")
+        frame_num += 1
+        line_num += 1
 
+    logfile.close()
 
-def runGraph(image_path, input_tensor, output_tensor):
+def runGraph(image_path, input_tensor, output_tensor, labels, session, session_name):
     global flagfound
     global n
+    results = []
 
     # Read in the image_data, but sort image paths first because os.listdir results are ordered arbitrarily
     file_paths = [os.path.join(image_path, _) for _ in os.listdir(image_path)]
     file_paths.sort()
     image_data = [tf.gfile.FastGFile(_, 'rb').read() for _ in file_paths if os.path.isfile(_)]
+
     # Feed the image_data as input to the graph and get first prediction
-    softmax_tensor = sess1.graph.get_tensor_by_name('primary/' + output_tensor)
-    input_placeholder = sess1.graph.get_tensor_by_name('primary/' + input_tensor)
+    softmax_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
+    input_placeholder = sess1.graph.get_tensor_by_name(session_name + '/' + input_tensor)
 
     print('Starting analysis on ' + str(len(image_data)) + ' video frames...')
 
-    event = []  # setup event tracking
-    videoclipend = 0
-    initial_smoothing = int(args.smoothing)  # apply a per frame smoothing factor to the data
-    initial_smoothing = initial_smoothing * int(args.fps)
-    smoothing = 0
+    # count the number of labels
+    top_k = []
+    for i in range(0, len(labels)):
+        top_k.append(i)
+
     for image in image_data:
         n = n + 1
-        predictions = sess1.run(softmax_tensor, {input_placeholder: image})
+        predictions = session.run(softmax_tensor, {input_placeholder: image})
 
-        top_k = [0, 1]
-
+        data_line = []
         for node_id in top_k:
-            human_string = primary_graph_lines[node_id][1]
+            human_string = labels[node_id][1]
             score = predictions[0][node_id]
-            fileTarget.write('%s, %s, %.5f, ' % (n, human_string, score))
 
+            score = float("{0:.4f}".format(score))
+            data_line.append(human_string)
+            data_line.append(score)
+
+            # save frames that are around the decision boundary so they can then be used for later model re-training.
             if args.training == True:
-                if score >= 0.75 and score <= 0.90:
+                if score >= 0.50 and score <= 0.80:
                     save_training_frames(n, human_string)
 
-            if (human_string == args.labelname):  # if the label detected matches the passed label to search for
-                if score < 0.95 and score >= 0.75:
-                    if args.filter.upper() == 'ALL':
-                        reportTarget.write('%s, %s, %.5f, %s, ' % (n, human_string, score, 'Medium'))
-                        reportTarget.write('\n')
+        results.append(data_line)
+        drawProgressBar(percentage(n, len(image_data)) / 100, 40)  # --------------------- Start processing logic
 
-                if score >= 0.95:
-                    reportTarget.write('%s, %s, %.5f, %s, ' % (n, human_string, score, 'High'))
-                    reportTarget.write('\n')
-                    smoothing = initial_smoothing
-                    event.append(n)
-
-        if score < 0.75:
-            if (smoothing == 0):
-                if len(event) >= initial_smoothing:
-                    if args.outputclips == True:
-                        videoclipend = create_clip(video_file, event, len(image_data), videoclipend)
-                event = []
-                smoothing = initial_smoothing
-            else:
-                smoothing = smoothing - 1
-
-    fileTarget.write("\n")
-    drawProgressBar(percentage(n, len(image_data)) / 100, 40)  # --------------------- Start processing logic
-
+    image_data = []
+    return results
 
 if args.allfiles:
     video_files = load_video_filenames(args.video_path)
     for video_file in video_files:
         # setup reporting and search flags
         filename, file_extension = path.splitext(path.basename(video_file))
-        reportTarget = setup_reporting(filename)
-        fileTarget = setup_logging(filename)
         n = 0
         flagfound = 0
         remove_video_frames()
         clean_video_path = os.path.join(args.video_path, '')
         currentSrcVideo = clean_video_path + video_file
         decode_video(currentSrcVideo)
-        primary_graph_lines = load_labels(args.labelpath)
+        loaded_labels = load_labels(args.labelpath)
         if args.modelpath.endswith('.pb'):
-            tensorpath = args.modelpath[:-3] + '-model.txt'
+            tensorpath = args.modelpath[:-3] + '-meta.txt'
         else:
             tensorpath = args.modelpath
         input_tensor, output_tensor = load_tensor_types(tensorpath)
-        runGraph(video_tempDir, input_tensor, output_tensor)
+        a_graph_name, a_graph = load_model(args.modelpath)
+        sess1 = tf.Session(graph=a_graph)
+        output = runGraph(video_tempDir, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+        write_reports(filename, output, int(args.smoothing))
+
 else:
     filename, file_extension = path.splitext(path.basename(args.video_path))
-    reportTarget = setup_reporting(filename)
-    fileTarget = setup_logging(filename)
     n = 0
     flagfound = 0
     remove_video_frames()
     currentSrcVideo = args.video_path
     decode_video(currentSrcVideo)
-    primary_graph_lines = load_labels(args.labelpath)
+    loaded_labels = load_labels(args.labelpath)
     if args.modelpath.endswith('.pb'):
-        tensorpath = args.modelpath[:-3] + '-model.txt'
+        tensorpath = args.modelpath[:-3] + '-meta.txt'
     else:
         tensorpath = args.modelpath
     input_tensor, output_tensor = load_tensor_types(tensorpath)
-    runGraph(video_tempDir, input_tensor, output_tensor)
+    a_graph_name, a_graph = load_model(args.modelpath)
+    sess1 = tf.Session(graph=a_graph)
+    output = runGraph(video_tempDir, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+    write_reports(filename, output, int(args.smoothing))
 
 if not args.keeptemp:
     remove_video_frames()
