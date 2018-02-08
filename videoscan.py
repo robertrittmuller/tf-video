@@ -43,6 +43,8 @@ parser.add_argument('--fps', '-fps', dest='fps', action='store', default='1',
                          'The higher this number the slower analysis will go. Default is 1 FPS')
 parser.add_argument('--allfiles', '-a', dest='allfiles', action='store_true',
                     help='Process all video files in the directory path.')
+parser.add_argument('--deinterlace', '-d', dest='deinterlace', action='store_true',
+                    help='Apply de-interlacing to video frames during extraction.')
 parser.add_argument('--outputclips', '-o', dest='outputclips', action='store_true',
                     help='Output results as video clips containing searched for labelname.')
 parser.add_argument('--training', '-tr', dest='training', action='store_true',
@@ -113,13 +115,17 @@ def save_training_frames(framenumber, label):
 
 
 def decode_video(video_path):
+    if args.deinterlace == True:
+        deinterlace = 'yadif'
+    else:
+        deinterlace = ''
     video_filename, video_file_extension = path.splitext(path.basename(video_path))
     print(' ')
     print('Decoding video file ' + video_filename)
     video_temp = os.path.join(video_tempDir, str(video_filename) + '_%04d.jpg')
     command = [
         FFMPEG_PATH, '-i', video_path,
-        '-vf', 'fps=' + args.fps, '-q:v', '1', '-vsync', 'vfr', video_temp, '-hide_banner', '-loglevel', '0',
+        '-vf', 'fps=' + args.fps, '-q:v', '1', '-vsync', 'vfr', video_temp, '-hide_banner', '-loglevel', '0', '-vf', deinterlace
     ]
     subprocess.call(command)
 
