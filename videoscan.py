@@ -8,6 +8,9 @@ import platform
 import argparse
 from glob import iglob
 from shutil import copy
+from io import StringIO
+from io import BytesIO
+from PIL import Image
 import timeit
 import uuid
 import numpy as np
@@ -125,9 +128,54 @@ def decode_video(video_path):
     video_temp = os.path.join(video_tempDir, str(video_filename) + '_%04d.jpg')
     command = [
         FFMPEG_PATH, '-i', video_path,
-        '-vf', 'fps=' + args.fps, '-q:v', '1', '-vsync', 'vfr', video_temp, '-hide_banner', '-loglevel', '0', '-vf', deinterlace
+        '-vf', 'fps=' + args.fps, '-q:v', '1', '-vsync', 'vfr', video_temp, '-hide_banner', '-loglevel', '0',
+        '-vf', deinterlace, '-vf', 'scale=640x480'
     ]
     subprocess.call(command)
+
+    # Read in the image_data, but sort image paths first because os.listdir results are ordered arbitrarily
+    file_paths = [os.path.join(video_tempDir, _) for _ in os.listdir(video_tempDir)]
+    file_paths.sort()
+    return [tf.gfile.FastGFile(_, 'rb').read() for _ in file_paths if os.path.isfile(_)]
+
+
+def decode_video_pipe(video_path):
+    images = []
+    if args.deinterlace == True:
+        deinterlace = 'yadif'
+    else:
+        deinterlace = ''
+    video_filename, video_file_extension = path.splitext(path.basename(video_path))
+    print(' ')
+    print('Loading into system memory video file ' + video_filename)
+    video_temp = os.path.join(video_tempDir, str(video_filename) + '_%04d.jpg')
+    command = [
+        FFMPEG_PATH, '-i', video_path,
+        '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
+        '-hide_banner', '-loglevel', '0', '-vf', deinterlace, '-f', 'image2pipe', '-vf', 'scale=640x480', '-'
+    ]
+    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=4*1024*1024)
+
+    while True:
+        raw_image = image_pipe.stdout.read(640*480*3)
+        if not raw_image:
+            break
+        image = np.fromstring(raw_image, dtype='uint8')
+        image = image.reshape((480, 640, 3))
+        images.append(convert2jpeg(image))
+        image_pipe.stdout.flush()
+
+    return images
+
+
+def convert2jpeg(raw_image):
+    temp_image = BytesIO()
+    img = Image.fromarray(raw_image, 'RGB')
+    img.save(temp_image, 'jpeg', quality=95)
+    img.close()
+    temp_image.seek(0)
+    return temp_image.getvalue()
+
 
 
 def create_clip(video_path, event, totalframes, videoclipend):
@@ -283,15 +331,11 @@ def write_reports(path, data, smoothing=0):
 
     logfile.close()
 
-def runGraph(image_path, input_tensor, output_tensor, labels, session, session_name):
+
+def runGraph(image_data, input_tensor, output_tensor, labels, session, session_name):
     global flagfound
     global n
     results = []
-
-    # Read in the image_data, but sort image paths first because os.listdir results are ordered arbitrarily
-    file_paths = [os.path.join(image_path, _) for _ in os.listdir(image_path)]
-    file_paths.sort()
-    image_data = [tf.gfile.FastGFile(_, 'rb').read() for _ in file_paths if os.path.isfile(_)]
 
     # Feed the image_data as input to the graph and get first prediction
     softmax_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
@@ -338,16 +382,21 @@ if args.allfiles:
         remove_video_frames()
         clean_video_path = os.path.join(args.video_path, '')
         currentSrcVideo = clean_video_path + video_file
-        decode_video(currentSrcVideo)
-        loaded_labels = load_labels(args.labelpath)
+        image_data = decode_video(currentSrcVideo)
+        # print(type(image_data[0]))
+
         if args.modelpath.endswith('.pb'):
             tensorpath = args.modelpath[:-3] + '-meta.txt'
+            labelpath = args.modelpath[:-3] + '-labels.txt'
         else:
             tensorpath = args.modelpath
+            labelpath = args.modelpath + '-labels.txt'
+
+        loaded_labels = load_labels(labelpath)
         input_tensor, output_tensor = load_tensor_types(tensorpath)
         a_graph_name, a_graph = load_model(args.modelpath)
         sess1 = tf.Session(graph=a_graph)
-        output = runGraph(video_tempDir, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+        output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
         write_reports(filename, output, int(args.smoothing))
 
 else:
@@ -356,16 +405,20 @@ else:
     flagfound = 0
     remove_video_frames()
     currentSrcVideo = args.video_path
-    decode_video(currentSrcVideo)
-    loaded_labels = load_labels(args.labelpath)
+    image_data = decode_video(currentSrcVideo)
+
     if args.modelpath.endswith('.pb'):
         tensorpath = args.modelpath[:-3] + '-meta.txt'
+        labelpath = args.modelpath[:-3] + '-labels.txt'
     else:
         tensorpath = args.modelpath
+        labelpath = args.modelpath + '-labels.txt'
+
+    loaded_labels = load_labels(labelpath)
     input_tensor, output_tensor = load_tensor_types(tensorpath)
     a_graph_name, a_graph = load_model(args.modelpath)
     sess1 = tf.Session(graph=a_graph)
-    output = runGraph(video_tempDir, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+    output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
     write_reports(filename, output, int(args.smoothing))
 
 if not args.keeptemp:
