@@ -8,14 +8,14 @@ import platform
 import argparse
 from glob import iglob
 from shutil import copy
-from io import StringIO
 from io import BytesIO
 from PIL import Image
 import timeit
 import uuid
 import numpy as np
+import cv2
 
-# TODO: Modify detection to only process data after inference has completed.
+# DONE: Modify detection to only process data after inference has completed.
 # DONE: Update smoothing function to work as intended (currently broken)
 # DONE: Modify model unpersist function to use loaded model name vs. static assignment.
 # TODO: Add support for loading multiple models and performing predictions with all loaded models.
@@ -139,6 +139,15 @@ def decode_video(video_path):
     return [tf.gfile.FastGFile(_, 'rb').read() for _ in file_paths if os.path.isfile(_)]
 
 
+def convert2jpeg(raw_image):
+    temp_image = BytesIO()
+    img = Image.fromarray(raw_image, 'RGB')
+    img.save(temp_image, 'jpeg', quality=95)
+    img.close()
+    temp_image.seek(0)
+    return temp_image.getvalue()
+
+
 def decode_video_pipe(video_path):
     images = []
     if args.deinterlace == True:
@@ -147,8 +156,7 @@ def decode_video_pipe(video_path):
         deinterlace = ''
     video_filename, video_file_extension = path.splitext(path.basename(video_path))
     print(' ')
-    print('Loading into system memory video file ' + video_filename)
-    video_temp = os.path.join(video_tempDir, str(video_filename) + '_%04d.jpg')
+    print('Reading video frames into memory from ' + video_filename)
     command = [
         FFMPEG_PATH, '-i', video_path,
         '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
@@ -162,20 +170,11 @@ def decode_video_pipe(video_path):
             break
         image = np.fromstring(raw_image, dtype='uint8')
         image = image.reshape((480, 640, 3))
+
         images.append(convert2jpeg(image))
         image_pipe.stdout.flush()
 
     return images
-
-
-def convert2jpeg(raw_image):
-    temp_image = BytesIO()
-    img = Image.fromarray(raw_image, 'RGB')
-    img.save(temp_image, 'jpeg', quality=95)
-    img.close()
-    temp_image.seek(0)
-    return temp_image.getvalue()
-
 
 
 def create_clip(video_path, event, totalframes, videoclipend):
@@ -375,15 +374,17 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
 if args.allfiles:
     video_files = load_video_filenames(args.video_path)
     for video_file in video_files:
-        # setup reporting and search flags
         filename, file_extension = path.splitext(path.basename(video_file))
         n = 0
         flagfound = 0
         remove_video_frames()
         clean_video_path = os.path.join(args.video_path, '')
         currentSrcVideo = clean_video_path + video_file
-        image_data = decode_video(currentSrcVideo)
-        # print(type(image_data[0]))
+
+        if args.keeptemp or args.training:
+            image_data = decode_video(currentSrcVideo)
+        else:
+            image_data = decode_video_pipe(currentSrcVideo)
 
         if args.modelpath.endswith('.pb'):
             tensorpath = args.modelpath[:-3] + '-meta.txt'
@@ -405,7 +406,10 @@ else:
     flagfound = 0
     remove_video_frames()
     currentSrcVideo = args.video_path
-    image_data = decode_video(currentSrcVideo)
+    if args.keeptemp or args.training:
+        image_data = decode_video(currentSrcVideo)
+    else:
+        image_data = decode_video_pipe(currentSrcVideo)
 
     if args.modelpath.endswith('.pb'):
         tensorpath = args.modelpath[:-3] + '-meta.txt'
