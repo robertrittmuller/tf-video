@@ -13,7 +13,6 @@ from PIL import Image
 import timeit
 import uuid
 import numpy as np
-import cv2
 
 # DONE: Modify detection to only process data after inference has completed.
 # DONE: Update smoothing function to work as intended (currently broken)
