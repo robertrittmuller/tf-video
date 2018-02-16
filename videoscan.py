@@ -13,7 +13,6 @@ from PIL import Image
 import timeit
 import uuid
 import numpy as np
-import cv2
 
 # DONE: Modify detection to only process data after inference has completed.
 # DONE: Update smoothing function to work as intended (currently broken)
@@ -29,34 +28,19 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 start = timeit.default_timer()
 
 parser = argparse.ArgumentParser(description='Process some video files using Tensorflow!')
-parser.add_argument('--temppath', '-tp', dest='temppath', action='store', default='./vidtemp/',
-                    help='Path to the directory where temporary files are stored.')
-parser.add_argument('--trainingpath', '-rtp', dest='trainingpath', action='store', default='./retraining/',
-                    help='Path to the directory where frames for retraining are stored.')
-parser.add_argument('--reportpath', '-rp', dest='reportpath', action='store', default='results/',
-                    help='Path to the directory where results are stored.')
-parser.add_argument('--modelpath', '-mp', dest='modelpath', action='store', default='models/',
-                    help='Path to the tensorflow protobuf model file.')
-parser.add_argument('--labelpath', '-lp', dest='labelpath', action='store', default='models/default-labels.txt',
-                    help='Path to the tensorflow model labels file.')
-parser.add_argument('--smoothing', '-sm', dest='smoothing', action='store', default='0',
-                    help='Apply a type of "smoothing" factor to detection results.')
-parser.add_argument('--fps', '-fps', dest='fps', action='store', default='1',
-                    help='Frames Per Second used to sample input video. '
-                         'The higher this number the slower analysis will go. Default is 1 FPS')
-parser.add_argument('--allfiles', '-a', dest='allfiles', action='store_true',
-                    help='Process all video files in the directory path.')
-parser.add_argument('--deinterlace', '-d', dest='deinterlace', action='store_true',
-                    help='Apply de-interlacing to video frames during extraction.')
-parser.add_argument('--outputclips', '-o', dest='outputclips', action='store_true',
-                    help='Output results as video clips containing searched for labelname.')
-parser.add_argument('--training', '-tr', dest='training', action='store_true',
-                    help='Saves predicted frames for future model retraining.')
-parser.add_argument('--outputpadding', '-op', dest='outputpadding', action='store', default='45',
-                    help='Number of seconds added to the start and end of created video clips.')
-parser.add_argument('--keeptemp', '-k', dest='keeptemp', action='store_true',
-                    help='Keep ALL temporary extracted video frames.')
-parser.add_argument('--videopath', '-v', dest='video_path', action='store', required=True, help='Path to video file(s).')
+parser.add_argument('--temppath', '-tp',        dest='temppath',        action='store',     default='./vidtemp/',       help='Path to the directory where temporary files are stored.')
+parser.add_argument('--trainingpath', '-rtp',   dest='trainingpath',    action='store',     default='./retraining/',    help='Path to the directory where frames for retraining are stored.')
+parser.add_argument('--reportpath', '-rp',      dest='reportpath',      action='store',     default='results/',         help='Path to the directory where results are stored.')
+parser.add_argument('--modelpath', '-mp',       dest='modelpath',       action='store',     default='models/',          help='Path to the tensorflow protobuf model file.')
+parser.add_argument('--smoothing', '-sm',       dest='smoothing',       action='store',     default='0',                help='Apply a type of "smoothing" factor to detection results.')
+parser.add_argument('--fps', '-fps',            dest='fps',             action='store',     default='1',                help='Frames Per Second used to sample input video. ')
+parser.add_argument('--allfiles', '-a',         dest='allfiles',        action='store_true',                            help='Process all video files in the directory path.')
+parser.add_argument('--deinterlace', '-d',      dest='deinterlace',     action='store_true',                            help='Apply de-interlacing to video frames during extraction.')
+parser.add_argument('--outputclips', '-o',      dest='outputclips',     action='store_true',                            help='Output results as video clips containing searched for labelname.')
+parser.add_argument('--training', '-tr',        dest='training',        action='store_true',                            help='Saves predicted frames for future model retraining.')
+parser.add_argument('--outputpadding', '-op',   dest='outputpadding',   action='store',     default='45',               help='Number of seconds added to the start and end of created video clips.')
+parser.add_argument('--keeptemp', '-k',         dest='keeptemp',        action='store_true',                            help='Keep ALL temporary extracted video frames.')
+parser.add_argument('--videopath', '-v',        dest='video_path',      action='store',     required=True,              help='Path to video file(s).')
 
 args = parser.parse_args()
 currentSrcVideo = ''
@@ -371,6 +355,7 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
     image_data = []
     return results
 
+# -- Main processing loop for multiple video files
 if args.allfiles:
     video_files = load_video_filenames(args.video_path)
     for video_file in video_files:
@@ -400,6 +385,7 @@ if args.allfiles:
         output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
         write_reports(filename, output, int(args.smoothing))
 
+# -- Main processing loop for single video file
 else:
     filename, file_extension = path.splitext(path.basename(args.video_path))
     n = 0
@@ -428,6 +414,7 @@ else:
 if not args.keeptemp:
     remove_video_frames()
 
+# -- When main processing has completed, tally up the elapsed time.
 print(' ')
 stop = timeit.default_timer()
 total_time = stop - start
