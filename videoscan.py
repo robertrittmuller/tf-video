@@ -102,6 +102,7 @@ def save_training_frames(framenumber, label):
 
 
 def decode_video(video_path):
+    # launches FFMPEG to decode frames from the video file.
     if args.deinterlace == True:
         deinterlace = 'yadif'
     else:
@@ -211,11 +212,6 @@ def load_tensor_types(path):
     with open(path) as file:
         content = file.readlines()
     return content[0].rstrip() + ':0', content[1].rstrip() + ':0'  # return minus any extra characters we don't need
-    # else:
-    #     if args.modeltype =='mobilenetV1':
-    #         return 'input_image', 'MobilenetV1/Predictions/Reshape_1'
-    #     if args.modeltype == 'inception_resnet_v2':
-    #         return 'input_image', 'InceptionResnetV2/Logits/Predictions'
 
 
 def setup_reporting(passed_filename):
@@ -316,8 +312,10 @@ def write_reports(path, data, smoothing=0):
 
 
 def runGraph(image_data, input_tensor, output_tensor, labels, session, session_name):
+    # Performs inference using the passed model parameters. 
     global flagfound
     global n
+    n = 0
     results = []
 
     # Feed the image_data as input to the graph and get first prediction
