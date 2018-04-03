@@ -2,6 +2,9 @@ import tensorflow as tf
 import sys
 import os
 import subprocess
+import threading
+# from multiprocessing.dummy import Pool as ThreadPool
+from multiprocessing import Pool as ThreadPool, TimeoutError, freeze_support
 import datetime
 import os.path as path
 import platform
@@ -132,9 +135,25 @@ def convert2jpeg(raw_image):
     temp_image.seek(0)
     return temp_image.getvalue()
 
+def threaded_img_process(raw_image):
+    if not raw_image:
+        return
+    raw_image = np.fromstring(raw_image, dtype='uint8')
+    raw_image = raw_image.reshape((480, 640, 3))
+    return convert2jpeg(raw_image)
+
+def batch_process_imgs(batch, threads):
+    pool = ThreadPool(threads)
+    batch = (pool.map(threaded_img_process, batch))
+    return np.array(batch)
 
 def decode_video_pipe(video_path):
-    images = []
+    raw_images = []
+    results = []
+    done = False
+    batchsize = 100         # Should be dynamic based on memory capacity.
+    threads = 4             # also should be dynamic based on processing capability. 
+
     if args.deinterlace == True:
         deinterlace = 'yadif'
     else:
@@ -147,19 +166,57 @@ def decode_video_pipe(video_path):
         '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
         '-hide_banner', '-loglevel', '0', '-vf', deinterlace, '-f', 'image2pipe', '-vf', 'scale=640x480', '-'
     ]
-    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=4*1024*1024)
+    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True, bufsize=4*1024*1024)
 
     while True:
         raw_image = image_pipe.stdout.read(640*480*3)
         if not raw_image:
             break
-        image = np.fromstring(raw_image, dtype='uint8')
-        image = image.reshape((480, 640, 3))
+        else:
+            raw_images.append(raw_image)
+            image_pipe.stdout.flush()
+            raw_image = []
 
-        images.append(convert2jpeg(image))
-        image_pipe.stdout.flush()
+    # frame_count = 1
+    # while done == False:
+    #     while True:
+    #         raw_image = image_pipe.stdout.read(640*480*3)
+    #         if not raw_image:
+    #             done = True
+    #         else:
+    #             raw_images.append(raw_image)
+    #             image_pipe.stdout.flush()
+    #             raw_image = []
+            
+    #         if (frame_count >= batchsize) or (done == True):
+    #             # process the batch
+    #             results = np.concatenate([results,batch_process_imgs(raw_images,threads)])
+    #             print('Loaded frame ' + str(len(results)))
+    #             frame_count = 1
+    #             raw_images = []
+    #         else:
+    #             frame_count = frame_count + 1
+    #         if done == True:
+    #             break
+    
+    pool = ThreadPool(4)
+    results = (pool.map(threaded_img_process, raw_images))
+    results = np.array(results)
+    
+    # while True:
+    #     raw_image = image_pipe.stdout.read(640*480*3)
+    #     if not raw_image:
+    #         break
+    #     image = np.fromstring(raw_image, dtype='uint8')
+    #     image = image.reshape((480, 640, 3))
 
-    return images
+    #     images.append(convert2jpeg(image))
+    #     image_pipe.stdout.flush()
+
+    # clean things up
+    image_pipe.kill()
+    raw_images = []
+    return results
 
 
 def create_clip(video_path, event, totalframes, videoclipend):
@@ -354,16 +411,50 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
     return results
 
 # -- Main processing loop for multiple video files
-if args.allfiles:
-    video_files = load_video_filenames(args.video_path)
-    for video_file in video_files:
-        filename, file_extension = path.splitext(path.basename(video_file))
+if __name__ == '__main__':
+    # fix for parallel processing
+    freeze_support()
+    if args.allfiles:
+        video_files = load_video_filenames(args.video_path)
+
+        if args.modelpath.endswith('.pb'):
+            tensorpath = args.modelpath[:-3] + '-meta.txt'
+            labelpath = args.modelpath[:-3] + '-labels.txt'
+        else:
+            tensorpath = args.modelpath
+            labelpath = args.modelpath + '-labels.txt'
+
+        loaded_labels = load_labels(labelpath)
+        input_tensor, output_tensor = load_tensor_types(tensorpath)
+        a_graph_name, a_graph = load_model(args.modelpath)
+        sess1 = tf.Session(graph=a_graph)
+
+        for video_file in video_files:
+            filename, file_extension = path.splitext(path.basename(video_file))
+            n = 0
+            flagfound = 0
+            remove_video_frames()
+            clean_video_path = os.path.join(args.video_path, '')
+            currentSrcVideo = clean_video_path + video_file
+
+            if args.keeptemp or args.training:
+                image_data = decode_video(currentSrcVideo)
+            else:
+                image_data = decode_video_pipe(currentSrcVideo)
+
+            output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+            write_reports(filename, output, int(args.smoothing))
+
+            # clean up
+            image_data = []
+
+    # -- Main processing loop for single video file
+    else:
+        filename, file_extension = path.splitext(path.basename(args.video_path))
         n = 0
         flagfound = 0
         remove_video_frames()
-        clean_video_path = os.path.join(args.video_path, '')
-        currentSrcVideo = clean_video_path + video_file
-
+        currentSrcVideo = args.video_path
         if args.keeptemp or args.training:
             image_data = decode_video(currentSrcVideo)
         else:
@@ -383,39 +474,13 @@ if args.allfiles:
         output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
         write_reports(filename, output, int(args.smoothing))
 
-# -- Main processing loop for single video file
-else:
-    filename, file_extension = path.splitext(path.basename(args.video_path))
-    n = 0
-    flagfound = 0
-    remove_video_frames()
-    currentSrcVideo = args.video_path
-    if args.keeptemp or args.training:
-        image_data = decode_video(currentSrcVideo)
-    else:
-        image_data = decode_video_pipe(currentSrcVideo)
+    if not args.keeptemp:
+        remove_video_frames()
 
-    if args.modelpath.endswith('.pb'):
-        tensorpath = args.modelpath[:-3] + '-meta.txt'
-        labelpath = args.modelpath[:-3] + '-labels.txt'
-    else:
-        tensorpath = args.modelpath
-        labelpath = args.modelpath + '-labels.txt'
-
-    loaded_labels = load_labels(labelpath)
-    input_tensor, output_tensor = load_tensor_types(tensorpath)
-    a_graph_name, a_graph = load_model(args.modelpath)
-    sess1 = tf.Session(graph=a_graph)
-    output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
-    write_reports(filename, output, int(args.smoothing))
-
-if not args.keeptemp:
-    remove_video_frames()
-
-# -- When main processing has completed, tally up the elapsed time.
-print(' ')
-stop = timeit.default_timer()
-total_time = stop - start
-mins, secs = divmod(total_time, 60)
-hours, mins = divmod(mins, 60)
-sys.stdout.write("Total running time: %d:%d:%d.\n" % (hours, mins, secs))
+    # -- When main processing has completed, tally up the elapsed time.
+    print(' ')
+    stop = timeit.default_timer()
+    total_time = stop - start
+    mins, secs = divmod(total_time, 60)
+    hours, mins = divmod(mins, 60)
+    sys.stdout.write("Total running time: %d:%d:%d.\n" % (hours, mins, secs))
