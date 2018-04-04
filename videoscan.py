@@ -3,7 +3,6 @@ import sys
 import os
 import subprocess
 import threading
-# from multiprocessing.dummy import Pool as ThreadPool
 from multiprocessing import Pool as ThreadPool, TimeoutError, freeze_support
 import datetime
 import os.path as path
