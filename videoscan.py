@@ -176,41 +176,7 @@ def decode_video_pipe(video_path):
             image_pipe.stdout.flush()
             raw_image = []
 
-    # frame_count = 1
-    # while done == False:
-    #     while True:
-    #         raw_image = image_pipe.stdout.read(640*480*3)
-    #         if not raw_image:
-    #             done = True
-    #         else:
-    #             raw_images.append(raw_image)
-    #             image_pipe.stdout.flush()
-    #             raw_image = []
-            
-    #         if (frame_count >= batchsize) or (done == True):
-    #             # process the batch
-    #             results = np.concatenate([results,batch_process_imgs(raw_images,threads)])
-    #             print('Loaded frame ' + str(len(results)))
-    #             frame_count = 1
-    #             raw_images = []
-    #         else:
-    #             frame_count = frame_count + 1
-    #         if done == True:
-    #             break
-    
-    pool = ThreadPool(4)
-    results = (pool.map(threaded_img_process, raw_images))
-    results = np.array(results)
-    
-    # while True:
-    #     raw_image = image_pipe.stdout.read(640*480*3)
-    #     if not raw_image:
-    #         break
-    #     image = np.fromstring(raw_image, dtype='uint8')
-    #     image = image.reshape((480, 640, 3))
-
-    #     images.append(convert2jpeg(image))
-    #     image_pipe.stdout.flush()
+    results = batch_process_imgs(raw_images, 4)
 
     # clean things up
     image_pipe.kill()
