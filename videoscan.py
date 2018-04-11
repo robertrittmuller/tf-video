@@ -15,6 +15,7 @@ from PIL import Image
 import timeit
 import uuid
 import numpy as np
+import psutil
 
 # DONE: Modify detection to only process data after inference has completed.
 # DONE: Update smoothing function to work as intended (currently broken)
@@ -45,21 +46,6 @@ parser.add_argument('--keeptemp', '-k',         dest='keeptemp',        action='
 parser.add_argument('--videopath', '-v',        dest='video_path',      action='store',     required=True,              help='Path to video file(s).')
 
 args = parser.parse_args()
-currentSrcVideo = ''
-
-if platform.system() == 'Windows':
-    # path to ffmpeg bin
-    FFMPEG_PATH = 'ffmpeg.exe'
-else:
-    # path to ffmpeg bin
-    default_ffmpeg_path = '/usr/local/bin/ffmpeg'
-    FFMPEG_PATH = default_ffmpeg_path if path.exists(default_ffmpeg_path) else '/usr/bin/ffmpeg'
-
-# setup video temp directory for video frames
-video_tempDir = args.temppath
-if not os.path.isdir(video_tempDir):
-    os.mkdir(video_tempDir)
-
 
 def drawProgressBar(percent, barLen=20):
     sys.stdout.write("\r")
@@ -144,14 +130,14 @@ def threaded_img_process(raw_image):
 def batch_process_imgs(batch, threads):
     pool = ThreadPool(threads)
     batch = (pool.map(threaded_img_process, batch))
+    pool.close()
     return np.array(batch)
 
 def decode_video_pipe(video_path):
     raw_images = []
-    results = []
-    done = False
-    batchsize = 100         # Should be dynamic based on memory capacity.
-    threads = 4             # also should be dynamic based on processing capability. 
+    jpegimages = []
+    batchsize = int((sysram.free / 3) / 921600)     # dynamic based on memory capacity.
+    threads = int(sysproc / 2)                      # use half of the number of availible processors  
 
     if args.deinterlace == True:
         deinterlace = 'yadif'
@@ -170,18 +156,20 @@ def decode_video_pipe(video_path):
     while True:
         raw_image = image_pipe.stdout.read(640*480*3)
         if not raw_image:
+            jpegimages = np.concatenate([jpegimages, batch_process_imgs(raw_images, threads)])
             break
         else:
             raw_images.append(raw_image)
             image_pipe.stdout.flush()
             raw_image = []
-
-    results = batch_process_imgs(raw_images, 4)
+            if len(raw_images) >= batchsize:
+                jpegimages = np.concatenate([jpegimages, batch_process_imgs(raw_images, threads)])
+                raw_images = []
 
     # clean things up
     image_pipe.kill()
     raw_images = []
-    return results
+    return jpegimages
 
 
 def create_clip(video_path, event, totalframes, videoclipend):
@@ -340,9 +328,9 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
     n = 0
     results = []
 
-    # Feed the image_data as input to the graph and get first prediction
-    softmax_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
-    input_placeholder = sess1.graph.get_tensor_by_name(session_name + '/' + input_tensor)
+    # setup the input and output tensors
+    output_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
+    input_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + input_tensor)
 
     print('Starting analysis on ' + str(len(image_data)) + ' video frames...')
 
@@ -353,7 +341,7 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
 
     for image in image_data:
         n = n + 1
-        predictions = session.run(softmax_tensor, {input_placeholder: image})
+        predictions = session.run(output_tensor, {input_tensor: image})
 
         data_line = []
         for node_id in top_k:
@@ -374,6 +362,26 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
 
     image_data = []
     return results
+
+# -- Environment setup
+currentSrcVideo = ''
+
+if platform.system() == 'Windows':
+    # path to ffmpeg bin
+    FFMPEG_PATH = 'ffmpeg.exe'
+else:
+    # path to ffmpeg bin
+    default_ffmpeg_path = '/usr/local/bin/ffmpeg'
+    FFMPEG_PATH = default_ffmpeg_path if path.exists(default_ffmpeg_path) else '/usr/bin/ffmpeg'
+
+# setup video temp directory for video frames
+video_tempDir = args.temppath
+if not os.path.isdir(video_tempDir):
+    os.mkdir(video_tempDir)
+
+# get how much ram we have to work with
+sysram = psutil.virtual_memory()
+sysproc = psutil.cpu_count()
 
 # -- Main processing loop for multiple video files
 if __name__ == '__main__':
