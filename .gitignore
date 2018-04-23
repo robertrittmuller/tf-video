@@ -5,5 +5,5 @@
 /retraining
 /.idea
 ./vscode
-testing.bat
+testing*.bat
 settings.json
