@@ -49,6 +49,8 @@ Search video for features in video. Creates/overwrites `[videofilename]-results.
 <br>`--reportpath` Path to the directory where reports/output are stored.
 <br>`--temppath` Path to the directory where temporary files are stored.
 <br>`--trainingpath` Path to the directory where detected frames for retraining are stored.
+<br>`--height` Height of the image frame to be extracted and processed. Needs to match model input layer!
+<br>`--width` Width of the image frame to be extracted and processed. Needs to match model input layer!
 <br>`--smoothing` Apply a type of "smoothing" factor to detection results. (Range = 1-6)
 <br>`--fps` Frames Per Second used to sample input video. The higher this number the slower analysis will go. (Default is 1 FPS)
 <br>`--allfiles` Process all video files in the directory path.
