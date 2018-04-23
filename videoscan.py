@@ -104,14 +104,16 @@ def remove_video_frames():
             print(e)
 
 
-def save_training_frames(framenumber, label):
-    # copies frames/images to the passed directory for the purposes of retraining the model
+def save_training_frames(frame, framenumber, label):
+    # saves the passed RGB values (extracted frame) to a JPEG image with the label name.
     srcpath = os.path.join(args.temppath, '')
     dstpath = os.path.join(args.trainingpath + '/' + label, '')
     if not os.path.exists(dstpath):
         os.makedirs(dstpath)
-    copy_files(srcpath + '*' + str(framenumber) + '.jpg', dstpath)
-
+    
+    # take the passed RGB values and create a JPEG from them.
+    image = Image.frombytes('RGB', (int(args.width), int(args.height)), frame)
+    image.save(dstpath + str(framenumber) + '.jpg')
 
 def decode_video(video_path):
     # launches FFMPEG to decode frames from the video file.
@@ -340,11 +342,11 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
             break # stop processing frames EOF!
         else:
             # Run model and get predictions
-            raw_image = np.fromstring(raw_image, dtype='uint8')
-            raw_image = raw_image.reshape((int(args.width), int(args.height), 3))
-            float_caster = raw_image.astype(float)
-            dims_expander = np.expand_dims(float_caster, 0)
-            final_image = np.divide(np.subtract(dims_expander, [0]), [255])
+            processed_image = np.fromstring(raw_image, dtype='uint8')
+            processed_image = processed_image.reshape((int(args.width), int(args.height), 3))
+            processed_image = processed_image.astype(float)
+            processed_image = np.expand_dims(processed_image, 0)
+            final_image = np.divide(np.subtract(processed_image, [0]), [255])
             
             predictions = session.run(output_tensor, {input_tensor: final_image})
             predictions = np.squeeze(predictions)
@@ -363,7 +365,7 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
             # save frames that are around the decision boundary so they can then be used for later model re-training.
             if args.training == True:
                 if score >= 0.50 and score <= 0.80:
-                    save_training_frames(n, human_string)
+                    save_training_frames(raw_image, n, human_string)
 
         results.append(data_line)
         drawProgressBar(percentage(n, (num_of_frames)) / 100, 40)  # --------------------- Start processing logic
