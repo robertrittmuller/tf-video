@@ -5,14 +5,13 @@ An automation "wrapper" based on TF-SLIM to make it easy to detect various featu
 
 ## Features
 
- - Can utilize virtually any trained model (Inception Resnet V2, Mobilenet, etc) via TF-SLIM.
+ - Can utilize virtually any trained model (Inception Resnet V2, Mobilenet, etc) via Tensorflow Hub (retrain.py).
  - Runs under both Linux and Windows (Python 3.6.x).
- - Silly fast, even on CPU for detection. Using an GTX 1060 Nvidia GPU it can perform analysis of a two-hour video in less than 7 minutes even using 
- Inception Resnet V2 and under 3 minutes using Mobilenet V1.
+ - Silly fast, even on CPU for detection. Using an GTX 1060 Nvidia GPU it can perform analysis of a two-hour video in less than 7 minutes even using Inception Resnet V2 and under 3 minutes using Mobilenet V1.
 
 ## Requirements
 
-Tensorflow 1.x (tested on 1.4), FFMPEG, and Python 2.7.x or Python 3.6.x (Windows).
+Tensorflow 1.x (tested on 1.7), FFMPEG, and Python 3.6.x (Windows & Linux).
 A pre-trained model such as Inception V3 or Mobilenet.
 
 ## Installation
