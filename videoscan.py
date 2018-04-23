@@ -16,11 +16,13 @@ import timeit
 import uuid
 import numpy as np
 import psutil
+import json
 
 # DONE: Modify detection to only process data after inference has completed.
 # DONE: Update smoothing function to work as intended (currently broken)
 # DONE: Modify model unpersist function to use loaded model name vs. static assignment.
-# TODO: Add support for loading multiple models and performing predictions with all loaded models.
+# DONE: Update FFMPEG to use PIPE function for RGB frames directly into the model.
+# TODO: Add support for loading multiple models and performing predictions with all loaded models for every frame and per triggers.
 # TODO: Need to cycle through all detected labels and correctly output to report.
 # TODO: Add support for basic HTML report which includes processed data & visualizations.
 
@@ -37,6 +39,8 @@ parser.add_argument('--reportpath', '-rp',      dest='reportpath',      action='
 parser.add_argument('--modelpath', '-mp',       dest='modelpath',       action='store',     default='models/',          help='Path to the tensorflow protobuf model file.')
 parser.add_argument('--smoothing', '-sm',       dest='smoothing',       action='store',     default='0',                help='Apply a type of "smoothing" factor to detection results.')
 parser.add_argument('--fps', '-fps',            dest='fps',             action='store',     default='1',                help='Frames Per Second used to sample input video. ')
+parser.add_argument('--height', '-y',           dest='height',          action='store',     default='299',              help='Height of the image frame for processing. ')
+parser.add_argument('--width', '-x',            dest='width',           action='store',     default='299',              help='Width of the image frame for processing. ')
 parser.add_argument('--allfiles', '-a',         dest='allfiles',        action='store_true',                            help='Process all video files in the directory path.')
 parser.add_argument('--deinterlace', '-d',      dest='deinterlace',     action='store_true',                            help='Apply de-interlacing to video frames during extraction.')
 parser.add_argument('--outputclips', '-o',      dest='outputclips',     action='store_true',                            help='Output results as video clips containing searched for labelname.')
@@ -62,6 +66,26 @@ def drawProgressBar(percent, barLen=20):
 def percentage(part, whole):
     return 100 * (float(part) / float(whole))
 
+def getinfo(vid_file_path):
+    ''' Give a json from ffprobe command line
+
+    @vid_file_path : The absolute (full) path of the video file, string.
+    '''
+    if type(vid_file_path) != str:
+        raise Exception('Gvie ffprobe a full file path of the video')
+        return
+
+    command = ["ffprobe",
+            "-loglevel",  "quiet",
+            "-print_format", "json",
+             "-show_format",
+             "-show_streams",
+             vid_file_path
+             ]
+
+    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, err = pipe.communicate()
+    return json.loads(out)
 
 def copy_files(src_glob, dst_folder):
     for fname in iglob(src_glob):
@@ -112,66 +136,6 @@ def decode_video(video_path):
     return [tf.gfile.FastGFile(_, 'rb').read() for _ in file_paths if os.path.isfile(_)]
 
 
-def convert2jpeg(raw_image):
-    temp_image = BytesIO()
-    img = Image.fromarray(raw_image, 'RGB')
-    img.save(temp_image, 'jpeg', quality=95)
-    img.close()
-    temp_image.seek(0)
-    return temp_image.getvalue()
-
-def threaded_img_process(raw_image):
-    if not raw_image:
-        return
-    raw_image = np.fromstring(raw_image, dtype='uint8')
-    raw_image = raw_image.reshape((480, 640, 3))
-    return convert2jpeg(raw_image)
-
-def batch_process_imgs(batch, threads):
-    pool = ThreadPool(threads)
-    batch = (pool.map(threaded_img_process, batch))
-    pool.close()
-    return np.array(batch)
-
-def decode_video_pipe(video_path):
-    raw_images = []
-    jpegimages = []
-    batchsize = int((sysram.free / 3) / 921600)     # dynamic based on memory capacity.
-    threads = int(sysproc / 2)                      # use half of the number of availible processors  
-
-    if args.deinterlace == True:
-        deinterlace = 'yadif'
-    else:
-        deinterlace = ''
-    video_filename, video_file_extension = path.splitext(path.basename(video_path))
-    print(' ')
-    print('Reading video frames into memory from ' + video_filename)
-    command = [
-        FFMPEG_PATH, '-i', video_path,
-        '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
-        '-hide_banner', '-loglevel', '0', '-vf', deinterlace, '-f', 'image2pipe', '-vf', 'scale=640x480', '-'
-    ]
-    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True, bufsize=4*1024*1024)
-
-    while True:
-        raw_image = image_pipe.stdout.read(640*480*3)
-        if not raw_image:
-            jpegimages = np.concatenate([jpegimages, batch_process_imgs(raw_images, threads)])
-            break
-        else:
-            raw_images.append(raw_image)
-            image_pipe.stdout.flush()
-            raw_image = []
-            if len(raw_images) >= batchsize:
-                jpegimages = np.concatenate([jpegimages, batch_process_imgs(raw_images, threads)])
-                raw_images = []
-
-    # clean things up
-    image_pipe.kill()
-    raw_images = []
-    return jpegimages
-
-
 def create_clip(video_path, event, totalframes, videoclipend):
     # creates a video clip of the detected event
     if (event[0] - (int(args.outputpadding) * int(args.fps))) >= 1:
@@ -216,6 +180,12 @@ def load_labels(path):
                  in tf.gfile.GFile(path)]
     return [item[0].split(":") for item in file_data]
 
+def load_labels_new(label_file):
+  label = []
+  proto_as_ascii_lines = tf.gfile.GFile(label_file).readlines()
+  for l in proto_as_ascii_lines:
+    label.append(l.rstrip())
+  return label
 
 def load_tensor_types(path):
     # reads in the input and output tensors
@@ -321,32 +291,70 @@ def write_reports(path, data, smoothing=0):
     logfile.close()
 
 
-def runGraph(image_data, input_tensor, output_tensor, labels, session, session_name):
+def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session, session_name):
     # Performs inference using the passed model parameters. 
     global flagfound
     global n
     n = 0
     results = []
 
+    # setup pointer to video file
+    if args.deinterlace == True:
+        deinterlace = 'yadif'
+    else:
+        deinterlace = ''
+
+    video_filename, video_file_extension = path.splitext(path.basename(video_file_name))
+    num_seconds = int(float(getinfo(video_file_name)['streams'][0]['duration']))
+    num_of_frames = int(float(getinfo(video_file_name)['streams'][0]['duration_ts']))
+    effective_fps = int(num_of_frames / num_seconds)
+    if effective_fps > int(args.fps):
+        effective_fps = int(args.fps)
+        num_of_frames = num_seconds * int(args.fps)
+    
+    frame_size = args.width + 'x' + args.height
+    print(' ')
+    print('Procesing ' + str(num_seconds) + ' seconds of ' + video_filename + ' at ' + str(effective_fps) + ' frame(s) per second.')
+    command = [
+        FFMPEG_PATH, '-i', video_file_name,
+        '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
+        '-hide_banner', '-loglevel', '0', '-vf', deinterlace, '-f', 'image2pipe', '-vf', 'scale=' + frame_size, '-'
+    ]
+    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True, bufsize=4*1024*1024)
+
     # setup the input and output tensors
     output_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
     input_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + input_tensor)
 
-    print('Starting analysis on ' + str(len(image_data)) + ' video frames...')
+    # print('Starting analysis on video frames...')
 
     # count the number of labels
     top_k = []
     for i in range(0, len(labels)):
         top_k.append(i)
 
-    for image in image_data:
-        n = n + 1
-        predictions = session.run(output_tensor, {input_tensor: image})
+    while True:
+        # read next frame
+        raw_image = image_pipe.stdout.read(int(args.width)*int(args.height)*3)
+        if not raw_image:
+            break # stop processing frames EOF!
+        else:
+            # Run model and get predictions
+            raw_image = np.fromstring(raw_image, dtype='uint8')
+            raw_image = raw_image.reshape((int(args.width), int(args.height), 3))
+            float_caster = raw_image.astype(float)
+            dims_expander = np.expand_dims(float_caster, 0)
+            final_image = np.divide(np.subtract(dims_expander, [0]), [255])
+            
+            predictions = session.run(output_tensor, {input_tensor: final_image})
+            predictions = np.squeeze(predictions)
+            image_pipe.stdout.flush()
+            n = n + 1
 
         data_line = []
         for node_id in top_k:
-            human_string = labels[node_id][1]
-            score = predictions[0][node_id]
+            human_string = labels[node_id]
+            score = predictions[node_id]
 
             score = float("{0:.4f}".format(score))
             data_line.append(human_string)
@@ -358,9 +366,10 @@ def runGraph(image_data, input_tensor, output_tensor, labels, session, session_n
                     save_training_frames(n, human_string)
 
         results.append(data_line)
-        drawProgressBar(percentage(n, len(image_data)) / 100, 40)  # --------------------- Start processing logic
+        drawProgressBar(percentage(n, (num_of_frames)) / 100, 40)  # --------------------- Start processing logic
 
-    image_data = []
+    print(' ')
+    print(str(n - 1) + ' video frames processed for ' + video_file_name)
     return results
 
 # -- Environment setup
@@ -369,10 +378,13 @@ currentSrcVideo = ''
 if platform.system() == 'Windows':
     # path to ffmpeg bin
     FFMPEG_PATH = 'ffmpeg.exe'
+    FFPROBE_PATH = 'ffprobe.exe'
 else:
     # path to ffmpeg bin
     default_ffmpeg_path = '/usr/local/bin/ffmpeg'
+    default_ffprobe_path = '/usr/local/bin/ffprobe'
     FFMPEG_PATH = default_ffmpeg_path if path.exists(default_ffmpeg_path) else '/usr/bin/ffmpeg'
+    FFPROBE_PATH = default_ffprobe_path if path.exists(default_ffprobe_path) else '/usr/bin/ffprobe'
 
 # setup video temp directory for video frames
 video_tempDir = args.temppath
@@ -397,7 +409,7 @@ if __name__ == '__main__':
             tensorpath = args.modelpath
             labelpath = args.modelpath + '-labels.txt'
 
-        loaded_labels = load_labels(labelpath)
+        loaded_labels = load_labels_new(labelpath)
         input_tensor, output_tensor = load_tensor_types(tensorpath)
         a_graph_name, a_graph = load_model(args.modelpath)
         sess1 = tf.Session(graph=a_graph)
@@ -410,12 +422,7 @@ if __name__ == '__main__':
             clean_video_path = os.path.join(args.video_path, '')
             currentSrcVideo = clean_video_path + video_file
 
-            if args.keeptemp or args.training:
-                image_data = decode_video(currentSrcVideo)
-            else:
-                image_data = decode_video_pipe(currentSrcVideo)
-
-            output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+            output = runGraphFaster(currentSrcVideo, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
             write_reports(filename, output, int(args.smoothing))
 
             # clean up
@@ -428,10 +435,6 @@ if __name__ == '__main__':
         flagfound = 0
         remove_video_frames()
         currentSrcVideo = args.video_path
-        if args.keeptemp or args.training:
-            image_data = decode_video(currentSrcVideo)
-        else:
-            image_data = decode_video_pipe(currentSrcVideo)
 
         if args.modelpath.endswith('.pb'):
             tensorpath = args.modelpath[:-3] + '-meta.txt'
@@ -444,7 +447,7 @@ if __name__ == '__main__':
         input_tensor, output_tensor = load_tensor_types(tensorpath)
         a_graph_name, a_graph = load_model(args.modelpath)
         sess1 = tf.Session(graph=a_graph)
-        output = runGraph(image_data, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
+        output = runGraphFaster(currentSrcVideo, input_tensor, output_tensor, loaded_labels, sess1, a_graph_name)
         write_reports(filename, output, int(args.smoothing))
 
     if not args.keeptemp:
