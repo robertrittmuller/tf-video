@@ -11,6 +11,7 @@ import argparse
 from glob import iglob
 from shutil import copy
 from io import BytesIO
+import PIL
 from PIL import Image
 import timeit
 import uuid
@@ -99,12 +100,11 @@ def remove_video_frames():
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
-                # elif os.path.isdir(file_path): shutil.rmtree(file_path)
         except Exception as e:
             print(e)
 
 
-def save_training_frames(frame, framenumber, label):
+def save_training_frames(frame, framenumber, label, width, height, score, videofilename):
     # saves the passed RGB values (extracted frame) to a JPEG image with the label name.
     srcpath = os.path.join(args.temppath, '')
     dstpath = os.path.join(args.trainingpath + '/' + label, '')
@@ -112,8 +112,8 @@ def save_training_frames(frame, framenumber, label):
         os.makedirs(dstpath)
     
     # take the passed RGB values and create a JPEG from them.
-    image = Image.frombytes('RGB', (int(args.width), int(args.height)), frame)
-    image.save(dstpath + str(framenumber) + '.jpg')
+    image = Image.frombytes('RGB', (int(width), int(height)), frame)
+    image.save(dstpath + str(score) + '-' + videofilename + '-' + str(framenumber) + '.jpg')
 
 def decode_video(video_path):
     # launches FFMPEG to decode frames from the video file.
@@ -306,17 +306,33 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
     else:
         deinterlace = ''
 
+    # Let's get the video meta data
     video_filename, video_file_extension = path.splitext(path.basename(video_file_name))
-    num_seconds = int(float(getinfo(video_file_name)['streams'][0]['duration']))
-    num_of_frames = int(float(getinfo(video_file_name)['streams'][0]['duration_ts']))
+    video_metadata = getinfo(video_file_name)
+    num_seconds = int(float(video_metadata['streams'][0]['duration']))
+    num_of_frames = int(float(video_metadata['streams'][0]['duration_ts']))
+    video_width = int(video_metadata['streams'][0]['width'])
+    video_height = int(video_metadata['streams'][0]['height'])
+    
+    # let's get the real FPS as we don't want duplicate frames!
     effective_fps = int(num_of_frames / num_seconds)
     if effective_fps > int(args.fps):
         effective_fps = int(args.fps)
         num_of_frames = num_seconds * int(args.fps)
     
-    frame_size = args.width + 'x' + args.height
+    source_frame_size = str(video_width) + 'x' + str(video_height)
+    target_frame_size = args.width + 'x' + args.height
+
+    if(args.training == True):
+        frame_size = source_frame_size
+    else:
+        frame_size = target_frame_size
+        video_width = int(args.width)
+        video_height = int(args.height)
+
     print(' ')
-    print('Procesing ' + str(num_seconds) + ' seconds of ' + video_filename + ' at ' + str(effective_fps) + ' frame(s) per second.')
+    print('Procesing ' + str(num_seconds) + ' seconds of ' + video_filename + ' at ' + str(effective_fps) + 
+        ' frame(s) per second with ' + frame_size + ' source frame size.')
     command = [
         FFMPEG_PATH, '-i', video_file_name,
         '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
@@ -328,8 +344,6 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
     output_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
     input_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + input_tensor)
 
-    # print('Starting analysis on video frames...')
-
     # count the number of labels
     top_k = []
     for i in range(0, len(labels)):
@@ -337,17 +351,25 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
 
     while True:
         # read next frame
-        raw_image = image_pipe.stdout.read(int(args.width)*int(args.height)*3)
+        raw_image = image_pipe.stdout.read(int(video_width)*int(video_height)*3)
         if not raw_image:
             break # stop processing frames EOF!
         else:
             # Run model and get predictions
             processed_image = np.fromstring(raw_image, dtype='uint8')
-            processed_image = processed_image.reshape((int(args.width), int(args.height), 3))
-            processed_image = processed_image.astype(float)
-            processed_image = np.expand_dims(processed_image, 0)
-            final_image = np.divide(np.subtract(processed_image, [0]), [255])
+            processed_image = processed_image.reshape((int(video_width), int(video_height), 3))
             
+            if frame_size != target_frame_size:
+                # we need to fix the frame size so the model does not panic!
+                fixed_image = Image.frombytes('RGB', (int(video_width), int(video_height)), processed_image)
+                fixed_image = fixed_image.resize((int(args.width), int(args.height)), PIL.Image.ANTIALIAS)
+                fixed_image = np.expand_dims(fixed_image, 0)
+                final_image = np.divide(np.subtract(fixed_image, [0]), [255])
+            else:
+                processed_image = processed_image.astype(float)
+                processed_image = np.expand_dims(processed_image, 0)
+                final_image = np.divide(np.subtract(processed_image, [0]), [255])
+
             predictions = session.run(output_tensor, {input_tensor: final_image})
             predictions = np.squeeze(predictions)
             image_pipe.stdout.flush()
@@ -365,7 +387,7 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
             # save frames that are around the decision boundary so they can then be used for later model re-training.
             if args.training == True:
                 if score >= 0.50 and score <= 0.80:
-                    save_training_frames(raw_image, n, human_string)
+                    save_training_frames(raw_image, n, human_string, video_width, video_height, int(score * 100), video_filename)
 
         results.append(data_line)
         drawProgressBar(percentage(n, (num_of_frames)) / 100, 40)  # --------------------- Start processing logic
