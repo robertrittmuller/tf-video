@@ -42,6 +42,8 @@ parser.add_argument('--smoothing', '-sm',       dest='smoothing',       action='
 parser.add_argument('--fps', '-fps',            dest='fps',             action='store',     default='1',                help='Frames Per Second used to sample input video. ')
 parser.add_argument('--height', '-y',           dest='height',          action='store',     default='299',              help='Height of the image frame for processing. ')
 parser.add_argument('--width', '-x',            dest='width',           action='store',     default='299',              help='Width of the image frame for processing. ')
+parser.add_argument('--traininglower', '-tl',   dest='traininglower',   action='store',     default='40',               help='Lower bound prediction for frame sampling when training flag is set. ')
+parser.add_argument('--trainingupper', '-tu',   dest='trainingupper',   action='store',     default='60',               help='Upper bound prediction for frame sampling when training flag is set. ')
 parser.add_argument('--allfiles', '-a',         dest='allfiles',        action='store_true',                            help='Process all video files in the directory path.')
 parser.add_argument('--deinterlace', '-d',      dest='deinterlace',     action='store_true',                            help='Apply de-interlacing to video frames during extraction.')
 parser.add_argument('--outputclips', '-o',      dest='outputclips',     action='store_true',                            help='Output results as video clips containing searched for labelname.')
@@ -386,7 +388,7 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
 
             # save frames that are around the decision boundary so they can then be used for later model re-training.
             if args.training == True:
-                if score >= 0.50 and score <= 0.80:
+                if score >= float(int(args.traininglower) / 100) and score <= float(int(args.trainingupper) / 100):
                     save_training_frames(raw_image, n, human_string, video_width, video_height, int(score * 100), video_filename)
 
         results.append(data_line)
