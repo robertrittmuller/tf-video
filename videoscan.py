@@ -340,7 +340,7 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
         '-vf', 'fps=' + args.fps, '-r', args.fps, '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24', '-vsync', 'vfr',
         '-hide_banner', '-loglevel', '0', '-vf', deinterlace, '-f', 'image2pipe', '-vf', 'scale=' + frame_size, '-'
     ]
-    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True, bufsize=4*1024*1024)
+    image_pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=4*1024*1024)
 
     # setup the input and output tensors
     output_tensor = sess1.graph.get_tensor_by_name(session_name + '/' + output_tensor)
