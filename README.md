@@ -11,7 +11,7 @@ An automation "wrapper" based on TF-SLIM to make it easy to detect various featu
 
 ## Requirements
 
-Tensorflow 1.x (tested on 1.7), FFMPEG, and Python 3.6.x (Windows & Linux).
+Tensorflow 1.x (tested on 1.7), FFMPEG (Tested on 3.4), and Python 3.6.x (Windows & Linux).
 A pre-trained model such as Inception V3 or Mobilenet.
 
 ## Installation
