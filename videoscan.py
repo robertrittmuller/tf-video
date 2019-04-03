@@ -358,7 +358,7 @@ def runGraphFaster(video_file_name, input_tensor, output_tensor, labels, session
             break # stop processing frames EOF!
         else:
             # Run model and get predictions
-            processed_image = np.fromstring(raw_image, dtype='uint8')
+            processed_image = np.frombuffer(raw_image, dtype='uint8')
             processed_image = processed_image.reshape((int(video_width), int(video_height), 3))
             
             if frame_size != target_frame_size:
