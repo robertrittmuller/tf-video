@@ -241,7 +241,7 @@ def smoothListGaussian(list, strippedXs=False, degree=2):
 
 def load_model(modelpath):
     if os.path.exists(modelpath):
-        with tf.gfile.FastGFile(modelpath, 'rb') as file:
+        with tf.gfile.GFile(modelpath, 'rb') as file:
             graph_def1 = tf.GraphDef()
             graph_def1.ParseFromString(file.read())
             tensor_id = str(uuid.uuid4())
